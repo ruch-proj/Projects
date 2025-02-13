@@ -1,0 +1,58 @@
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+
+
+def generate_synthetic_data(n_samples=1000):
+    np.random.seed(42)
+    data = {
+        'transaction_amount': np.random.normal(100, 50, n_samples),
+        'transaction_time': np.random.uniform(0, 24, n_samples),
+        'num_transactions_per_day': np.random.poisson(5, n_samples),
+        'account_balance': np.random.normal(5000, 2000, n_samples),
+    }
+    df = pd.DataFrame(data)
+    df['is_fraud'] = np.random.choice([0, 1], size=n_samples, p=[0.98, 0.02])
+    return df
+
+
+def preprocess_data(df):
+    features = df.drop(columns=['is_fraud'])
+    labels = df['is_fraud']
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features)
+    return features_scaled, labels
+
+
+def train_fraud_detection_model(features, labels):
+    model = IsolationForest(n_estimators=100, contamination=0.02, random_state=42)
+    model.fit(features)
+    return model
+
+
+def detect_fraud(model, features):
+    predictions = model.predict(features)
+    return np.where(predictions == -1, 1, 0)
+
+
+def main():
+    print("Generating synthetic data...")
+    df = generate_synthetic_data()
+    features, labels = preprocess_data(df)
+
+    X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
+
+    print("Training fraud detection model...")
+    model = train_fraud_detection_model(X_train, y_train)
+
+    print("Detecting fraud...")
+    predictions = detect_fraud(model, X_test)
+
+    df_results = pd.DataFrame({'Actual': y_test, 'Predicted': predictions})
+    print(df_results.head(20))
+
+
+if __name__ == "__main__":
+    main()
