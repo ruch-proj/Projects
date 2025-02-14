@@ -1,0 +1,84 @@
+import os
+import sqlite3
+import threading
+from flask import Flask, request, jsonify
+from cryptography.fernet import Fernet
+import tkinter as tk
+from tkinter import filedialog, messagebox
+
+# ============== Database Setup ==============
+DB_FILE = "file_manager.db"
+conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE,
+        role TEXT
+    )
+""")
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filename TEXT,
+        owner TEXT,
+        encrypted_content BLOB
+    )
+""")
+conn.commit()
+
+# ============== Flask API ==============
+app = Flask(__name__)
+encryption_key = Fernet.generate_key()
+cipher = Fernet(encryption_key)
+file_locks = threading.Lock()
+
+
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    data = request.json
+    filename = data['filename']
+    content = data['content']
+    owner = data['owner']
+    encrypted_content = cipher.encrypt(content.encode())
+
+    with file_locks:
+        cursor.execute("INSERT INTO files (filename, owner, encrypted_content) VALUES (?, ?, ?)",
+                       (filename, owner, encrypted_content))
+        conn.commit()
+
+    return jsonify({"message": "File uploaded successfully!"})
+
+
+@app.route("/download/<filename>", methods=["GET"])
+def download_file(filename):
+    cursor.execute("SELECT encrypted_content FROM files WHERE filename = ?", (filename,))
+    file = cursor.fetchone()
+    if not file:
+        return jsonify({"error": "File not found!"})
+    decrypted_content = cipher.decrypt(file[0]).decode()
+    return jsonify({"filename": filename, "content": decrypted_content})
+
+
+# ============== GUI (Tkinter) ==============
+def select_file():
+    file_path = filedialog.askopenfilename()
+    if file_path:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            file_content = f.read()
+        filename = os.path.basename(file_path)
+        owner = "admin"  # Static for now, can be dynamic
+        cursor.execute("INSERT INTO files (filename, owner, encrypted_content) VALUES (?, ?, ?)",
+                       (filename, owner, cipher.encrypt(file_content.encode())))
+        conn.commit()
+        messagebox.showinfo("Success", f"File '{filename}' uploaded successfully!")
+
+
+# Tkinter UI
+root = tk.Tk()
+root.title("Secure File Manager")
+tk.Button(root, text="Upload File", command=select_file).pack(pady=20)
+root.mainloop()
+
+if __name__ == "__main__":
+    app.run(debug=True, host='0.0.0.0', port=5000)
