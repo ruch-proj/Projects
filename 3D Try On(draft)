@@ -1,0 +1,180 @@
+from flask import Flask, render_template_string, request
+import numpy as np
+from PIL import Image
+import mediapipe as mp
+import io
+import base64
+
+app = Flask(__name__)
+
+# Initialize MediaPipe Pose
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose()
+
+# HTML Template with Interactive Features
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>✨ 3D Try-On System ✨</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(to right, #ff758c, #ff7eb3);
+            text-align: center;
+            padding: 20px;
+            color: white;
+            transition: all 0.3s ease-in-out;
+        }
+        h1 {
+            text-shadow: 2px 2px 5px black;
+            font-size: 28px;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0px 0px 10px rgba(0,0,0,0.2);
+            display: inline-block;
+            color: black;
+            width: 90%;
+            max-width: 500px;
+        }
+        input, button {
+            margin: 10px;
+            padding: 10px;
+            width: 100%;
+            border-radius: 5px;
+            border: none;
+            font-size: 16px;
+        }
+        button {
+            background: #ff758c;
+            color: white;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        button:hover {
+            background: #ff5470;
+        }
+        #output {
+            display: none;
+            margin-top: 20px;
+        }
+        #drop-area {
+            border: 2px dashed #ff758c;
+            padding: 20px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        #drop-area:hover {
+            background: rgba(255, 117, 140, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <h1>👕 Try On Clothes Virtually! 🚀</h1>
+    <div class="container">
+        <label for="camera">Take a Photo 📸</label><br>
+        <input type="file" accept="image/*" id="camera" capture="user"><br>
+
+        <label>Upload Clothing Image:</label><br>
+        <div id="drop-area">📂 Drag & Drop or Click to Upload</div>
+        <input type="file" id="clothing" style="display: none;" accept="image/*"><br>
+
+        <button onclick="uploadImages()">Try It On</button>
+        <p id="loading" style="display: none;">Processing... ⏳</p>
+        
+        <div id="output">
+            <h2>Result:</h2>
+            <img id="output-img" src="" alt="Try-on result">
+        </div>
+    </div>
+
+    <script>
+        function uploadImages() {
+            const personFile = document.getElementById("camera").files[0];
+            const clothingFile = document.getElementById("clothing").files[0];
+            if (!personFile || !clothingFile) {
+                alert("Please upload both images! 📸👕");
+                return;
+            }
+            const formData = new FormData();
+            formData.append("person", personFile);
+            formData.append("clothing", clothingFile);
+
+            document.getElementById("loading").style.display = "block";
+
+            fetch("/", {
+                method: "POST",
+                body: formData
+            }).then(response => response.json()).then(data => {
+                document.getElementById("loading").style.display = "none";
+                document.getElementById("output").style.display = "block";
+                document.getElementById("output-img").src = "data:image/png;base64," + data.output_img;
+            }).catch(error => {
+                document.getElementById("loading").style.display = "none";
+                alert("Error processing image! ❌");
+            });
+        }
+
+        document.getElementById("drop-area").addEventListener("click", function() {
+            document.getElementById("clothing").click();
+        });
+    </script>
+</body>
+</html>
+"""
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
+        person_file = request.files["person"]
+        clothing_file = request.files["clothing"]
+
+        if person_file and clothing_file:
+            person_path = io.BytesIO(person_file.read())
+            clothing_path = io.BytesIO(clothing_file.read())
+
+            output_img_bytes = apply_clothing(person_path, clothing_path)
+            if output_img_bytes:
+                output_img = base64.b64encode(output_img_bytes).decode("utf-8")
+                return {"output_img": output_img}
+
+    return render_template_string(HTML_TEMPLATE)
+
+def apply_clothing(person_img_path, clothing_img_path):
+    """
+    Overlay the clothing image onto the person image using AI-based pose estimation.
+    """
+    person_img = Image.open(person_img_path).convert("RGB")
+    clothing_img = Image.open(clothing_img_path).convert("RGBA")
+
+    person_np = np.array(person_img)
+
+    results = pose.process(person_np)
+    if not results.pose_landmarks:
+        return None
+
+    left_shoulder = results.pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_SHOULDER]
+    right_shoulder = results.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+
+    img_width, img_height = person_img.size
+    left_x, left_y = int(left_shoulder.x * img_width), int(left_shoulder.y * img_height)
+    right_x, right_y = int(right_shoulder.x * img_width), int(right_shoulder.y * img_height)
+
+    clothing_width = abs(right_x - left_x) * 2
+    clothing_height = int(clothing_img.height * (clothing_width / clothing_img.width))
+    clothing_img = clothing_img.resize((clothing_width, clothing_height))
+
+    person_img.paste(clothing_img, (left_x - clothing_width // 4, left_y), clothing_img)
+
+    output_buffer = io.BytesIO()
+    person_img.save(output_buffer, format="PNG")
+    return output_buffer.getvalue()
+
+if __name__ == "__main__":
+    app.run(debug=True)
