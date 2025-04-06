@@ -1,0 +1,203 @@
+from hummingbot.strategy.script_strategy_base import ScriptStrategyBase
+from hummingbot.core.data_type.order_book import OrderBook
+from hummingbot.core.event.events import OrderFilledEvent
+from typing import Dict
+import pandas as pd
+import numpy as np
+from pandas_ta import bbands, macd, rsi  # Using pandas_ta instead of technical
+
+class EnhancedMarketMaker(ScriptStrategyBase):
+    """
+    Enhanced Market Making strategy with:
+    - Technical indicators (Bollinger Bands, MACD, RSI)
+    - Dynamic spread adjustment
+    - Inventory management
+    - Comprehensive status display
+    """
+    
+    markets = {
+        "binance": {"BTC-USDT"}  # Update with your exchange and trading pair
+    }
+
+    def __init__(self,
+                 trading_pair: str = "BTC-USDT",
+                 order_amount: float = 0.01,
+                 base_spread: float = 0.005,
+                 volatility_window: int = 20,
+                 max_inventory: float = 1.0,
+                 inventory_skew_factor: float = 0.7,
+                 candle_interval: str = "1m",
+                 candles_length: int = 20):
+        
+        super().__init__()
+        self._trading_pair = trading_pair
+        self._order_amount = order_amount
+        self._base_spread = base_spread
+        self._volatility_window = volatility_window
+        self._max_inventory = max_inventory
+        self._inventory_skew_factor = inventory_skew_factor
+        self._candle_interval = candle_interval
+        self._candles_length = candles_length
+
+        # Market data tracking
+        self._price_history = []
+        self._inventory = 0
+        self._candles = pd.DataFrame(columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume'
+        ])
+
+        # Performance tracking
+        self._total_fills = 0
+        self._profit_loss = 0
+        self._last_price = 0
+
+    def on_tick(self):
+        """Main strategy logic"""
+        order_book = self.connectors["binance"].order_books[self._trading_pair]
+        current_price = self._get_mid_price(order_book)
+        
+        # Update price history
+        self._update_price_history(current_price)
+        
+        # Update candles (simplified)
+        self._update_candles(current_price)
+        
+        if len(self._price_history) >= self._volatility_window and not self._candles.empty:
+            # Calculate indicators
+            candles_df = self._add_technical_indicators()
+            last_candle = candles_df.iloc[-1]
+            
+            # Calculate dynamic spreads
+            bid_spread, ask_spread = self._calculate_spreads(last_candle)
+            
+            # Calculate order prices
+            reference_price = last_candle['BB_MIDDLE']
+            bid_price = reference_price * (1 - bid_spread)
+            ask_price = reference_price * (1 + ask_spread)
+            
+            # Manage orders
+            self._manage_orders(bid_price, ask_price)
+
+    def _get_mid_price(self, order_book: OrderBook) -> float:
+        """Get current mid price"""
+        return (order_book.get_price(True) + order_book.get_price(False)) / 2
+
+    def _update_price_history(self, price: float):
+        """Maintain price history window"""
+        self._price_history.append(price)
+        self._last_price = price
+        if len(self._price_history) > self._volatility_window:
+            self._price_history.pop(0)
+
+    def _update_candles(self, current_price: float):
+        """Simplified candle update"""
+        if len(self._candles) == 0 or pd.Timestamp.now().minute != self._candles.iloc[-1]['timestamp'].minute:
+            new_candle = {
+                'timestamp': pd.Timestamp.now(),
+                'open': current_price,
+                'high': current_price,
+                'low': current_price,
+                'close': current_price,
+                'volume': 0
+            }
+            self._candles = pd.concat([self._candles, pd.DataFrame([new_candle])])
+            
+            if len(self._candles) > self._candles_length:
+                self._candles = self._candles.iloc[-self._candles_length:]
+        else:
+            self._candles.iloc[-1]['high'] = max(self._candles.iloc[-1]['high'], current_price)
+            self._candles.iloc[-1]['low'] = min(self._candles.iloc[-1]['low'], current_price)
+            self._candles.iloc[-1]['close'] = current_price
+
+    def _add_technical_indicators(self) -> pd.DataFrame:
+        """Add technical indicators using pandas_ta"""
+        df = self._candles.copy()
+        
+        # Bollinger Bands
+        bb = bbands(df['close'], length=20)
+        df = pd.concat([df, bb], axis=1)
+        
+        # MACD
+        df_macd = macd(df['close'])
+        df = pd.concat([df, df_macd], axis=1)
+        
+        # RSI
+        df['RSI'] = rsi(df['close'], length=14)
+        
+        return df
+
+    def _calculate_spreads(self, last_candle) -> tuple:
+        """Calculate dynamic spreads"""
+        # Volatility component
+        bb_width = (last_candle['BB_UPPER'] - last_candle['BB_LOWER']) / last_candle['BB_MIDDLE']
+        volatility = min(max(bb_width, 0.005), 0.05)
+        
+        # Trend component
+        macd_signal = (last_candle['MACD_12_26_9'] - last_candle['MACDs_12_26_9']) / last_candle['close']
+        rsi_position = (last_candle['RSI_14'] - 50) / 50
+        trend_strength = 0.7 * macd_signal + 0.3 * rsi_position
+        
+        # Inventory component
+        inventory_ratio = self._inventory / self._max_inventory
+        inventory_skew = np.sign(inventory_ratio) * min(abs(inventory_ratio), 1.0)
+        
+        # Base spread calculation
+        dynamic_spread = self._base_spread * (1 + volatility * 5)
+        
+        # Apply adjustments
+        if trend_strength > 0:  # Bullish
+            bid_spread = dynamic_spread * 0.9
+            ask_spread = dynamic_spread * 1.1
+        else:  # Bearish
+            bid_spread = dynamic_spread * 1.1
+            ask_spread = dynamic_spread * 0.9
+            
+        # Inventory adjustment
+        if abs(inventory_skew) > 0.3:
+            if inventory_skew > 0:
+                ask_spread *= (1 - self._inventory_skew_factor * inventory_skew)
+                bid_spread *= (1 + self._inventory_skew_factor * inventory_skew)
+            else:
+                bid_spread *= (1 - self._inventory_skew_factor * abs(inventory_skew))
+                ask_spread *= (1 + self._inventory_skew_factor * abs(inventory_skew))
+                
+        return bid_spread, ask_spread
+
+    def _manage_orders(self, bid_price: float, ask_price: float):
+        """Place new orders"""
+        self.cancel_all_orders()
+        self.buy(self._trading_pair, self._order_amount, bid_price)
+        self.sell(self._trading_pair, self._order_amount, ask_price)
+
+    def did_fill_order(self, event: OrderFilledEvent):
+        """Handle filled orders"""
+        if event.trading_pair == self._trading_pair:
+            if event.trade_type.name == "BUY":
+                self._inventory += event.amount
+                self._profit_loss -= event.amount * event.price
+            else:
+                self._inventory -= event.amount
+                self._profit_loss += event.amount * event.price
+                
+            self._total_fills += 1
+            
+            if abs(self._inventory) > self._max_inventory * 0.8:
+                self._rebalance_inventory()
+
+    def _rebalance_inventory(self):
+        """Rebalance inventory position"""
+        target_reduction = self._inventory * 0.5
+        if target_reduction > 0:
+            self.sell(self._trading_pair, abs(target_reduction), order_type=OrderType.MARKET)
+        else:
+            self.buy(self._trading_pair, abs(target_reduction), order_type=OrderType.MARKET)
+        self._inventory -= target_reduction
+
+    def format_status(self) -> str:
+        """Display strategy status"""
+        lines = [
+            f"Strategy: Enhanced Market Maker ({self._trading_pair})",
+            f"Inventory: {self._inventory:.4f} | P&L: {self._profit_loss:.2f} USDT",
+            f"Last Price: {self._last_price:.2f} | Fills: {self._total_fills}"
+        ]
+        return "\n".join(lines)
