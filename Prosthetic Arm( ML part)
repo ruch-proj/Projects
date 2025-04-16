@@ -1,0 +1,126 @@
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from scipy.signal import welch
+from scipy.stats import entropy
+from kymatio.numpy import Scattering1D
+from scipy.ndimage import zoom
+
+# -------------------
+# DATA AUGMENTATION
+# -------------------
+def augment_jitter(signal, sigma=0.05):
+    return signal + np.random.normal(0, sigma, signal.shape)
+
+def augment_scaling(signal, sigma=0.1):
+    scale = np.random.normal(1.0, sigma)
+    return signal * scale
+
+def augment_time_warp(signal, sigma=0.2):
+    stretched = zoom(signal, np.random.uniform(0.8, 1.2))
+    if len(stretched) > len(signal):
+        return stretched[:len(signal)]
+    else:
+        return np.pad(stretched, (0, len(signal) - len(stretched)), mode='constant')
+
+def apply_augmentations(signal):
+    return [
+        signal,
+        augment_jitter(signal),
+        augment_scaling(signal),
+        augment_time_warp(signal)
+    ]
+
+# -------------------
+# FEATURE EXTRACTION
+# -------------------
+def extract_features(signal, sampling_rate=1000):
+    features = []
+
+    # Time-domain
+    features.append(np.mean(signal))
+    features.append(np.std(signal))
+    features.append(np.max(signal))
+    features.append(np.min(signal))
+
+    # Frequency-domain
+    freqs, psd = welch(signal, fs=sampling_rate)
+    features.append(entropy(psd / np.sum(psd)))  # Spectral entropy
+    features.append(freqs[np.argmax(psd)])       # Dominant frequency
+
+    # Scattering coefficients
+    J = 6
+    Q = 8
+    scattering = Scattering1D(J=J, shape=signal.shape[-1], Q=Q)
+    Sx = scattering(signal)
+    features.append(np.mean(Sx))
+    features.append(np.std(Sx))
+
+    return np.array(features, dtype=np.float32)
+
+# -------------------
+# CUSTOM DATASET
+# -------------------
+class FeatureDataset(Dataset):
+    def __init__(self, signals, labels):
+        self.features = [extract_features(sig) for sig in signals]
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.features)
+
+    def __getitem__(self, idx):
+        x = torch.tensor(self.features[idx], dtype=torch.float32)
+        y = torch.tensor(self.labels[idx], dtype=torch.long)
+        return x, y
+
+# -------------------
+# MLP CLASSIFIER (Feature-based)
+# -------------------
+class FeatureMLP(nn.Module):
+    def __init__(self, input_size=8, num_classes=2):
+        super(FeatureMLP, self).__init__()
+        self.fc1 = nn.Linear(input_size, 64)
+        self.fc2 = nn.Linear(64, 32)
+        self.fc3 = nn.Linear(32, num_classes)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        return self.fc3(x)
+
+# -------------------
+# TRAINING SCRIPT
+# -------------------
+if __name__ == "__main__":
+    # Simulate dataset
+    signal_len = 500
+    signals = []
+    labels = []
+
+    for i in range(100):
+        base_signal = np.sin(2 * np.pi * 50 * np.linspace(0, 1, signal_len)) + 0.3 * np.random.randn(signal_len)
+        aug_signals = apply_augmentations(base_signal)
+        signals.extend(aug_signals)
+        labels.extend([0] * len(aug_signals) if i < 50 else [1] * len(aug_signals))  # binary classes
+
+    dataset = FeatureDataset(signals, labels)
+    loader = DataLoader(dataset, batch_size=8, shuffle=True)
+
+    model = FeatureMLP(input_size=8, num_classes=2)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    # Training loop
+    for epoch in range(10):
+        total_loss = 0
+        for inputs, targets in loader:
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        print(f"Epoch {epoch+1} | Loss: {total_loss:.4f}")
