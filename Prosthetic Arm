@@ -1,0 +1,40 @@
+import numpy as np
+from scipy.fft import fft
+from scipy.signal import welch
+from scipy.stats import entropy
+from kymatio.numpy import Scattering1D
+import matplotlib.pyplot as plt
+
+def extract_features(signal, sampling_rate=1000):
+    features = {}
+
+    # 1. Time-domain features
+    features['mean'] = np.mean(signal)
+    features['std'] = np.std(signal)
+    features['max'] = np.max(signal)
+    features['min'] = np.min(signal)
+
+    # 2. Frequency-domain features
+    freqs, psd = welch(signal, fs=sampling_rate)
+    features['spectral_entropy'] = entropy(psd / np.sum(psd))
+    features['dominant_freq'] = freqs[np.argmax(psd)]
+
+    # 3. Wavelet Scattering Coefficients
+    J = 6  # scale of scattering
+    Q = 8  # number of wavelets per octave
+    scattering = Scattering1D(J=J, shape=signal.shape[-1], Q=Q)
+    Sx = scattering(signal)
+    features['scattering_mean'] = np.mean(Sx)
+    features['scattering_std'] = np.std(Sx)
+
+    return features
+
+# Example usage
+if __name__ == "__main__":
+    # Simulated signal (replace this with real sensor data)
+    t = np.linspace(0, 1, 1000)
+    signal = np.sin(2 * np.pi * 50 * t) + 0.5 * np.random.randn(1000)
+
+    feats = extract_features(signal)
+    for key, value in feats.items():
+        print(f"{key}: {value:.4f}")
