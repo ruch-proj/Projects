@@ -1,0 +1,48 @@
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+from datetime import datetime
+
+# 1. Download data
+def fetch_data(ticker="AAPL", period="6mo"):
+    df = yf.download(ticker, period=period)
+    df.dropna(inplace=True)
+    return df
+
+# 2. Clean and process
+def process_data(df):
+    df['Return'] = df['Adj Close'].pct_change()
+    df['Volume_ZScore'] = (df['Volume'] - df['Volume'].mean()) / df['Volume'].std()
+    df.dropna(inplace=True)
+    return df
+
+# 3. Detect anomalies
+def detect_anomalies(df, threshold=3):
+    anomalies = df[np.abs(df['Volume_ZScore']) > threshold]
+    return anomalies
+
+# 4. Save clean data
+def save_data(df, filename="clean_stock_data.csv"):
+    df.to_csv(filename)
+    print(f"Data saved to {filename}")
+
+# 5. Plotting anomalies
+def plot_anomalies(df, anomalies):
+    plt.figure(figsize=(12,6))
+    plt.plot(df.index, df['Adj Close'], label='Adj Close')
+    plt.scatter(anomalies.index, anomalies['Adj Close'], color='red', label='Anomalies')
+    plt.title('Stock Price with Anomalies')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("anomalies_plot.png")
+    plt.show()
+
+# Run full pipeline
+if __name__ == "__main__":
+    df = fetch_data("AAPL")
+    df = process_data(df)
+    anomalies = detect_anomalies(df)
+    save_data(df)
+    plot_anomalies(df, anomalies)
