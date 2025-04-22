@@ -1,0 +1,60 @@
+# ETF Time Series Analysis & Report Generation Script
+
+# ------------------------
+# 📦 Load or install packages
+# ------------------------
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(quantmod, tidyverse, lubridate, zoo, rmarkdown)
+
+# ------------------------
+# 📈 Step 1: Download ETF Data
+# ------------------------
+tickers <- c("XLK", "XLF", "XLE")  # Tech, Financial, Energy ETFs
+
+get_clean_data <- function(ticker, from = "2023-01-01") {
+  raw_data <- getSymbols(ticker, src = "yahoo", from = from, auto.assign = FALSE)
+  df <- data.frame(
+    Date = index(raw_data),
+    Price = coredata(Ad(raw_data))
+  ) %>% drop_na()
+  df$ticker <- ticker
+  return(df)
+}
+
+# ------------------------
+# 📊 Step 2: Analyze Time Series
+# ------------------------
+analyze_etf <- function(df) {
+  df <- df %>%
+    arrange(Date) %>%
+    mutate(
+      SMA_20 = zoo::rollmean(Price, k = 20, fill = NA, align = "right"),
+      Return = c(NA, diff(log(Price)))
+    )
+  return(df)
+}
+
+# ------------------------
+# 🔄 Step 3: Run Analysis for All ETFs
+# ------------------------
+all_data <- tickers %>%
+  map(get_clean_data) %>%
+  map(analyze_etf) %>%
+  bind_rows()
+
+write.csv(all_data, "etf_data.csv", row.names = FALSE)
+
+# ------------------------
+# 📝 Step 4: Create R Markdown Report Content
+# ------------------------
+report_content <- '
+---
+title: "ETF Time Series Analysis Report"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+data <- read.csv("etf_data.csv")
+data$Date <- as.Date(data$Date)
