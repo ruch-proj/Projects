@@ -1,0 +1,68 @@
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, accuracy_score
+from scipy.stats import kurtosis, skew
+
+# Load EMG data (assume shape: [samples, channels] and labels)
+data = pd.read_csv('emg_data.csv')  # should contain columns: ch1, ch2, ch3, label
+X_raw = data[['ch1', 'ch2', 'ch3']].values
+y = data['label'].values
+
+# ----------------------------
+# Feature Extraction Function
+# ----------------------------
+def extract_features(signal_window):
+    return [
+        np.mean(signal_window),                # Mean Absolute Value (MAV)
+        np.sqrt(np.mean(signal_window**2)),    # Root Mean Square (RMS)
+        np.sum(np.abs(np.diff(signal_window))),# Waveform Length (WL)
+        np.var(signal_window),                 # Variance
+        skew(signal_window),                   # Skewness
+        kurtosis(signal_window)                # Kurtosis
+    ]
+
+# Sliding window to extract features
+def process_emg_data(X_raw, y, window_size=100, step=50):
+    features = []
+    labels = []
+    for i in range(0, len(X_raw) - window_size, step):
+        window = X_raw[i:i + window_size, :]
+        feature_vector = []
+        for ch in range(window.shape[1]):
+            feature_vector.extend(extract_features(window[:, ch]))
+        features.append(feature_vector)
+        labels.append(y[i + window_size // 2])  # Assign center label
+    return np.array(features), np.array(labels)
+
+X, y = process_emg_data(X_raw, y)
+
+# ----------------------------
+# Data Augmentation (Example: Add Gaussian noise)
+# ----------------------------
+def augment_data(X, y, factor=2):
+    augmented_X = []
+    augmented_y = []
+    for _ in range(factor):
+        noise = np.random.normal(0, 0.05, X.shape)
+        augmented_X.append(X + noise)
+        augmented_y.append(y)
+    return np.vstack([X] + augmented_X), np.hstack([y] + augmented_y)
+
+X_aug, y_aug = augment_data(X, y)
+
+# ----------------------------
+# Train/Test Split and Model
+# ----------------------------
+X_train, X_test, y_train, y_test = train_test_split(X_aug, y_aug, test_size=0.2, random_state=42)
+
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# ----------------------------
+# Evaluation
+# ----------------------------
+y_pred = model.predict(X_test)
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print(classification_report(y_test, y_pred))
