@@ -2,11 +2,12 @@ from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
-# Portfolio data without image
+# Portfolio data with image
 portfolio_data = {
     "name": "Ruchika Mahajan",
     "tagline": "Student | Web Developer | AI Developer | Tech Enthusiast",
     "about": "Creative tech enthusiast with a strong foundation in Mathematics and Electrical Engineering, passionate about building secure, scalable, and user-centric digital experiences. I bridge deep learning, embedded systems, and full-stack development to deliver impactful, real-time solutions.",
+    "image_url": "https://drive.google.com/thumbnail?id=19o1zgF8yV5UxDQoVlNmHe08wpKk_aLrc",  # Added image URL (replace with your actual image)
     "skills": {
         "Programming Languages": ["Python (Advanced)", "C/C++", "R"],
         "Machine Learning": ["TensorFlow", "PyTorch", "scikit-learn", "OpenCV"],
@@ -248,6 +249,22 @@ def home():
             max-width: 800px;
             position: relative;
             z-index: 1;
+        }
+
+        .profile-image {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 5px solid var(--primary-color);
+            margin: 0 auto 2rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .profile-image:hover {
+            transform: scale(1.05);
+            box-shadow: 0 15px 40px rgba(108, 99, 255, 0.4);
         }
 
         .hero-content h1 {
@@ -777,6 +794,11 @@ def home():
                 font-size: 1.5rem;
             }
 
+            .profile-image {
+                width: 150px;
+                height: 150px;
+            }
+
             nav ul li {
                 margin: 0.5rem;
                 font-size: 0.8rem;
@@ -823,6 +845,9 @@ def home():
     <main>
         <section class="hero" id="home">
             <div class="hero-content fade-in">
+                {% if data.image_url %}
+                <img src="{{ data.image_url }}" alt="{{ data.name }}" class="profile-image">
+                {% endif %}
                 <h1>{{ data.name }}</h1>
                 <h2>{{ data.tagline }}</h2>
                 <p>{{ data.about }}</p>
