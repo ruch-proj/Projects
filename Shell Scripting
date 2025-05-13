@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# URL to fetch data
+URL="https://www.amfiindia.com/spages/NAVAll.txt"
+
+# Output TSV file
+OUTPUT="scheme_nav.tsv"
+
+# Header for TSV file
+HEADER="Scheme Name\tAsset Value (₹ Cr)"
+
+# Temporary error file
+ERROR_FILE=$(mktemp)
+
+echo "Fetching NAV data from AMFI..."
+
+# Download and process with better validation
+if curl -sSf "$URL" 2>"$ERROR_FILE" | \
+   awk -F';' -v header="$HEADER" '
+     BEGIN {
+       print header
+       OFS="\t"
+     }
+     /^[0-9]+;/ {
+       gsub(/"/, "", $4)  # Remove quotes from scheme name
+       if ($4 && $5) print $4, $5
+     }' > "$OUTPUT"
+then
+    # Count the number of records (excluding header)
+    RECORD_COUNT=$(( $(wc -l < "$OUTPUT") - 1 ))
+    
+    echo "Success! Saved $RECORD_COUNT records to $OUTPUT"
+    rm -f "$ERROR_FILE"
+    exit 0
+else
+    echo "Error: Failed to fetch or process data" >&2
+    echo "Details:" >&2
+    cat "$ERROR_FILE" >&2
+    rm -f "$ERROR_FILE" "$OUTPUT" 2>/dev/null
+    exit 1
+fi
