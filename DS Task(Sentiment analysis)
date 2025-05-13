@@ -1,0 +1,194 @@
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+import gdown
+from scipy import stats
+from datetime import datetime
+
+# style
+sns.set(style="whitegrid", palette="husl")
+plt.rcParams['figure.figsize'] = (12, 6)
+
+# -----------------------------------
+#  Downloading Datasets using gdown
+# -----------------------------------
+def download_datasets():
+    try:
+        historical_file_id = "1IAfLZwu6rJzyWKgBToqwSmmVYU6VbjVs"
+        fear_greed_file_id = "1PgQC0tO8XN-wqkNyghWc_-mnrYv_nhSf"
+
+        gdown.download(f"https://drive.google.com/uc?id={historical_file_id}", 
+                       "historical_data.csv", quiet=False)
+        gdown.download(f"https://drive.google.com/uc?id={fear_greed_file_id}", 
+                       "fear_greed_index.csv", quiet=False)
+        return True
+    except Exception as e:
+        print(f"Download failed: {e}")
+        return False
+
+if not download_datasets():
+    exit()
+
+# -----------------------------------
+# Data Loading and Preprocessing
+# -----------------------------------
+def load_and_preprocess():
+    try:
+        trades_df = pd.read_csv("historical_data.csv")
+        fg_df = pd.read_csv("fear_greed_index.csv")
+
+        trades_df['timestamp'] = pd.to_datetime(trades_df['Timestamp'])
+        fg_df['date'] = pd.to_datetime(fg_df['date'])
+
+        trades_df['date'] = trades_df['timestamp'].dt.normalize()
+        fg_df['date'] = fg_df['date'].dt.normalize()
+
+        trades_df = trades_df[trades_df['Closed PnL'].notna()]
+        fg_df = fg_df[fg_df['classification'].notna()]
+        trades_df = trades_df.rename(columns={'Closed PnL': 'value'})
+
+        return trades_df, fg_df
+    except Exception as e:
+        print(f"\nError loading data: {e}")
+        return None, None
+
+trades_df, fg_df = load_and_preprocess()
+if trades_df is None:
+    exit()
+
+
+merged_df = pd.merge_asof(
+    trades_df.sort_values('timestamp'),
+    fg_df[['date', 'classification']].sort_values('date'),
+    on='date',
+    direction='forward'
+)
+
+# -----------------------------------
+# Feature Engineering
+# -----------------------------------
+def create_features(df):
+    agg_df = df.groupby(['date', 'classification']).agg({
+        'value': ['sum', 'count'],
+    }).reset_index()
+
+    agg_df.columns = ['date', 'classification', 'value_sum', 'value_count']
+    agg_df['PnL_Category'] = np.where(agg_df['value_sum'] > 0, 'Profit', 'Loss')
+    return agg_df
+
+agg_df = create_features(merged_df)
+
+# -----------------------------------
+# Visualizations
+# -----------------------------------
+def create_visualizations(df):
+    # 1. Boxplot with Swarmplot
+    plt.figure(figsize=(14, 7))
+    ax = sns.boxplot(x='classification', y='value_sum', hue='classification',
+                     data=df, showfliers=False, width=0.4, legend=False)
+    sns.swarmplot(x='classification', y='value_sum', data=df,
+                  color='black', alpha=0.5, size=4, ax=ax)
+    plt.title("Daily PnL Distribution by Market Sentiment", pad=20)
+    plt.ylabel("Daily Net PnL (USD)")
+    plt.xlabel("Market Sentiment")
+    plt.axhline(0, color='red', linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.show()
+
+    # 2. Violin Plot
+    plt.figure(figsize=(14, 7))
+    sns.violinplot(x='classification', y='value_sum', hue='classification',
+                   data=df, inner="quartile", cut=0, legend=False)
+    plt.title("PnL Distribution Density by Market Sentiment", pad=20)
+    plt.ylabel("Daily Net PnL (USD)")
+    plt.xlabel("Market Sentiment")
+    plt.axhline(0, color='red', linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.show()
+
+    # 3. Cumulative PnL over time by sentiment
+    cumulative_df = df.sort_values("date").copy()
+    cumulative_df['cumulative_pnl'] = cumulative_df.groupby('classification')['value_sum'].cumsum()
+    plt.figure(figsize=(14, 7))
+    sns.lineplot(x='date', y='cumulative_pnl', hue='classification',
+                 data=cumulative_df, linewidth=2.5)
+    plt.title("Cumulative PnL Over Time by Market Sentiment", pad=20)
+    plt.ylabel("Cumulative PnL (USD)")
+    plt.xlabel("Date")
+    plt.axhline(0, color='red', linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.show()
+
+    # 4. Heatmap of average PnL and trade count
+    pivot_df = df.pivot_table(index='classification', 
+                              values=['value_sum', 'value_count'], 
+                              aggfunc='mean')
+    plt.figure(figsize=(12, 6))
+    sns.heatmap(pivot_df, annot=True, fmt=".1f", cmap="YlGnBu", 
+                cbar_kws={'label': 'Average Value'})
+    plt.title("Average PnL and Trade Count by Market Sentiment", pad=20)
+    plt.tight_layout()
+    plt.show()
+
+create_visualizations(agg_df)
+
+# -----------------------------------
+# Statistical Analysis
+# -----------------------------------
+def generate_insights(df):
+    fear_pnl = df[df['classification'] == 'Fear']['value_sum']
+    greed_pnl = df[df['classification'] == 'Greed']['value_sum']
+
+    t_stat, p_val = stats.ttest_ind(fear_pnl, greed_pnl, equal_var=False)
+    print(f"\nStatistical Comparison (Fear vs Greed):")
+    print(f"T-statistic: {t_stat:.2f}, P-value: {p_val:.4f}")
+    if p_val < 0.05:
+        print("✅ The difference is statistically significant.")
+    else:
+        print("⚠️ The difference is not statistically significant.")
+
+    # Risk-return metrics
+    risk_return = df.groupby('classification').agg({
+        'value_sum': ['mean', 'std'],
+        'value_count': 'mean'
+    })
+    risk_return.columns = ['_'.join(col).strip('_') for col in risk_return.columns.values]
+    risk_return['sharpe_ratio'] = risk_return['value_sum_mean'] / risk_return['value_sum_std']
+    risk_return['avg_pnl_per_trade'] = risk_return['value_sum_mean'] / risk_return['value_count_mean']
+
+    print("\nRisk-Return Characteristics:")
+    print(risk_return[['value_sum_mean', 'value_sum_std', 'sharpe_ratio', 'avg_pnl_per_trade']])
+
+generate_insights(agg_df)
+
+# -----------------------------------
+# Strategy Recommendations
+# -----------------------------------
+def generate_recommendations(df):
+    fear_stats = df[df['classification'] == 'Fear']['value_sum'].describe()
+    greed_stats = df[df['classification'] == 'Greed']['value_sum'].describe()
+
+    print("\n=== Trading Strategy Recommendations ===")
+
+    print("\n1. During Fear periods (Mean=${:.2f}, Std=${:.2f}):".format(
+        fear_stats['mean'], fear_stats['std']))
+    print("   - Use lower leverage (2-5x)")
+    print("   - Consider mean-reversion strategies")
+    print("   - Apply tight stop-loss (1-2%)")
+    print("   - Focus on defensive/low-volatility assets")
+
+    print("\n2. During Greed periods (Mean=${:.2f}, Std=${:.2f}):".format(
+        greed_stats['mean'], greed_stats['std']))
+    print("   - Use higher leverage (5-10x) cautiously")
+    print("   - Trend-following strategies work better")
+    print("   - Use trailing stop-losses")
+    print("   - Increase position sizing carefully")
+
+    print("\n3. Universal Best Practices:")
+    print("   - Match position size with account equity")
+    print("   - Adjust stop-loss based on sentiment")
+    print("   - Analyze hourly/daily return patterns")
+    print("   - Re-evaluate strategies monthly")
+
+generate_recommendations(agg_df)
