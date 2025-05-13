@@ -1,0 +1,92 @@
+import requests
+from bs4 import BeautifulSoup
+import time
+from datetime import datetime
+
+def scrape_olx_car_covers():
+    base_url = "https://www.olx.in"
+    search_url = "https://www.olx.in/items/q-car-cover"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+    
+    try:
+        # Create output file with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"olx_car_covers_{timestamp}.txt"
+        
+        with open(filename, "w", encoding="utf-8") as file:
+            page = 1
+            total_count = 0
+            
+            while True:
+                print(f"Scraping page {page}...")
+                current_url = f"{search_url}?page={page}" if page > 1 else search_url
+                
+                try:
+                    response = requests.get(current_url, headers=headers)
+                    response.raise_for_status()
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # Updated selector - look for listing containers
+                    listings = soup.find_all('div', {'data-aut-id': 'itemBox'})
+                    
+                    if not listings:
+                        print("No more listings found.")
+                        break
+                    
+                    page_count = 0
+                    for listing in listings:
+                        try:
+                            # Extract title
+                            title_elem = listing.find('span', {'data-aut-id': 'itemTitle'})
+                            title = title_elem.get_text(strip=True) if title_elem else "No title"
+                            
+                            # Extract price
+                            price_elem = listing.find('span', {'data-aut-id': 'itemPrice'})
+                            price = price_elem.get_text(strip=True) if price_elem else "Price not listed"
+                            
+                            # Extract location
+                            location_elem = listing.find('span', {'data-aut-id': 'item-location'})
+                            location = location_elem.get_text(strip=True) if location_elem else "Location not specified"
+                            
+                            # Extract link
+                            link_elem = listing.find('a', {'data-aut-id': 'itemLink'})
+                            if link_elem:
+                                link = link_elem['href']
+                                if not link.startswith('http'):
+                                    link = f"{base_url}{link}"
+                                
+                                # Write to file
+                                file.write(f"Title: {title}\n")
+                                file.write(f"Price: {price}\n")
+                                file.write(f"Location: {location}\n")
+                                file.write(f"Link: {link}\n\n")
+                                file.write("-" * 50 + "\n\n")
+                                page_count += 1
+                                
+                        except Exception as e:
+                            print(f"Error processing listing: {e}")
+                            continue
+                    
+                    total_count += page_count
+                    print(f"Found {page_count} listings on page {page}")
+                    
+                    # Check if we should continue to next page
+                    if page_count == 0:
+                        break
+                    
+                    page += 1
+                    time.sleep(2)  # Respectful delay between requests
+                    
+                except requests.exceptions.RequestException as e:
+                    print(f"Error fetching page {page}: {e}")
+                    break
+                    
+        print(f"\nScraping complete! Saved {total_count} listings to {filename}")
+        
+    except Exception as e:
+        print(f"Critical error: {e}")
+
+if __name__ == "__main__":
+    scrape_olx_car_covers()
